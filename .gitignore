@@ -1,0 +1,8 @@
+# Folders #
+###########
+.idea*
+data*
+*.pyc
+*.dat
+*.clean
+
