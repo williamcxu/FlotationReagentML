@@ -13,6 +13,25 @@ atomic_numbers = {
 }
 
 
+# Read input SMILES from CSV or TXT file
+def read_smiles(file_path, n=None, stripNa=False):
+    if file_path.endswith(".csv"):
+        df = pd.read_csv(file_path)
+        if "smiles" not in df.columns:
+            raise ValueError("CSV must contain a column labeled 'smiles'")
+        smiles_list = df["smiles"].tolist()
+    elif file_path.endswith(".xlsx"):
+        df = pd.read_excel(file_path, skiprows=1)
+        smiles_list = df["smiles"].tolist()
+    elif file_path.endswith(".txt"):
+        with open(file_path, "r") as file:
+            smiles_list = [line.split()[0] for line in file if line.strip()]
+    else:
+        raise ValueError("Unsupported file format. Use XLSX, CSV, or TXT.")
+    smiles_list = [s.replace(".[Na+]", "") for s in smiles_list[:n]] if stripNa else smiles_list[:n]
+    return smiles_list
+
+
 def find_functional_head(mol, functional_group):
     """Finds the atoms belonging to the specified functional head, selecting the one closest to the end of SMILES."""
     substructures = mol.GetSubstructMatches(Chem.MolFromSmarts(functional_group))
@@ -28,6 +47,58 @@ def find_functional_head(mol, functional_group):
             if neighbor.GetAtomicNum() == 1:  # Hydrogen
                 func_head_atoms_with_H.append(neighbor.GetIdx())
     return func_head_atoms_with_H  # Select the last occurrence
+
+
+def generate_smiles_combinations(smiles_list, functional_heads, functional_groups,
+                                 output_csv="data/functionalgroup_combos.csv"):
+    """
+    Generates all combinations of each molecule (SMILES) with each functional group as a possible functional head.
+    Saves the results to a CSV file.
+
+    Parameters:
+    - smiles_list: list
+        List of SMILES strings for the base molecules.
+    - functional_heads: list
+        List of functional heads (substructures) corresponding to each SMILES. Must be same length as smiles_list.
+    - functional_groups: list
+        List of functional groups to replace the functional heads.
+    - output_csv: str (default: "data/functionalgroup_combos.csv")
+        File path to save the resulting combinations as a CSV file.
+
+    Returns:
+    - results: pd.DataFrame
+        A dataframe of the new SMILES combinations.
+    """
+    # Validate inputs
+    if len(smiles_list) != len(functional_heads):
+        raise ValueError("Length of smiles_list and functional_heads must be the same.")
+
+    # Initialize results
+    results = []
+
+    # Process each molecule
+    for smiles, head in zip(smiles_list, functional_heads):
+        if head not in smiles:
+            print(f"Warning: Functional head '{head}' not found in molecule '{smiles}'.")
+            continue  # Skip if the functional head is not in the SMILES
+
+        for group in functional_groups:
+            # Replace last occurrence of functional head with new functional group, if different
+            if group != head:
+                new_smiles = group.join(smiles.rsplit(head, 1))
+                results.append(new_smiles)
+
+    # Convert results to a DataFrame
+    df = pd.DataFrame(results, columns=["smiles"])
+
+    # Save DataFrame to CSV
+    if not df.empty:
+        df.to_csv(output_csv, index=False)
+        print(f"Saved {len(results)} new molecules to {output_csv}.")
+    else:
+        print("No valid combinations generated.")
+
+    return df
 
 
 def get_atomic_positions(mol):
@@ -122,6 +193,44 @@ def generate_bob_feature_matrix(smiles_known, smiles_unknown, functional_groups=
 
     return X_known, X_unknown
 
+def export_features(feature_matrix, file_name="feature_matrix.csv"):
+    """
+    Exports the feature matrix to a CSV file.
+
+    Parameters:
+    - feature_matrix: np.ndarray or pd.DataFrame
+      The matrix containing the features (generated features).
+    - feature_names: list
+      Names of the features (columns of the feature matrix).
+    - file_name: str
+      Name of the file to save the feature matrix to.
+    """
+    if isinstance(feature_matrix, pd.DataFrame):
+        feature_matrix_df = feature_matrix
+    else:
+        feature_matrix_df = pd.DataFrame(feature_matrix)
+
+    feature_matrix_df.to_csv(file_name, header=False, index=False)
+    print(f"Feature matrix exported successfully to '{file_name}'.")
+
+def load_features(file_name, header=None, index_col=False):
+    """
+    Loads the feature matrix from a CSV file.
+
+    Parameters:
+    - file_name: str
+      Name of the CSV file containing the feature matrix.
+    - header: int, optional
+    - index_col: str or int, optional
+
+    Returns:
+    - feature_matrix: np.ndarray
+      The loaded feature matrix.
+    """
+    feature_matrix = np.array(pd.read_csv(file_name, header=header, index_col=index_col))
+    print(f"Feature matrix loaded successfully from '{file_name}'.")
+    return feature_matrix
+
 
 # Define the molecule (SMILES) and basis set
 def compute_quantum_properties(smiles, basis='B3LYP/6-31G**'):
@@ -165,7 +274,7 @@ def compute_quantum_properties(smiles, basis='B3LYP/6-31G**'):
         volume = AllChem.ComputeMolVolume(mol)
 
         return {
-            "SMILES": smiles,
+            "smiles": smiles,
             "HOMO energy (Hartree)": homo_energy,
             "LUMO energy (Hartree)": lumo_energy,
             "HOMO-LUMO gap (Hartree)": homo_lumo_gap,
@@ -177,33 +286,37 @@ def compute_quantum_properties(smiles, basis='B3LYP/6-31G**'):
         return {"SMILES": smiles, "Error": str(e)}
 
 
-# Read input SMILES from CSV or TXT file
-def read_smiles(file_path, n=None):
-    if file_path.endswith(".csv"):
-        df = pd.read_csv(file_path)
-        if "smiles" not in df.columns:
-            raise ValueError("CSV must contain a column labeled 'smiles'")
-        smiles_list = df["smiles"].tolist()
-    elif file_path.endswith(".xlsx"):
-        df = pd.read_excel(file_path, skiprows=1)
-        smiles_list = df["smiles"].tolist()
-    elif file_path.endswith(".txt"):
-        with open(file_path, "r") as file:
-            smiles_list = [line.split()[0] for line in file if line.strip()]
-    else:
-        raise ValueError("Unsupported file format. Use XLSX, CSV, or TXT.")
-    # smiles_list = [s.replace(".[Na+].[Na+]", ".[Na+]") for s in smiles_list[:n]]
-    return smiles_list[:n]
-
-
 # Process multiple molecules and save results
-def process_and_save(file_path, output_csv="results/quantum_properties.csv", n=-1):
-    smiles_list = read_smiles(file_path, n)
+def qm_properties(smiles_input, output_csv="data/quantum_properties.csv", n=None):
+    """
+    Process SMILES molecules, compute quantum properties, and save results to a CSV file.
+    Accepts a file with SMILES strings or a directly provided list of SMILES strings.
+
+    Parameters:
+    - smiles_input: str or list
+        File path containing SMILES strings (one per line) or a list of SMILES strings directly.
+    - output_csv: str
+        Path to save the resulting CSV with quantum properties.
+    - n: int, optional
+        Number of lines to read (if smiles_input is a file) or the number of SMILES to process (if a list).
+
+    Returns:
+    - None
+        Saves a CSV file with computed quantum properties.
+    """
+    # Determine if input is a file or a list
+    if isinstance(smiles_input, str):
+        # Input is a file path, read SMILES strings from the file
+        smiles_list = read_smiles(smiles_input, n)
+    elif isinstance(smiles_input, list):
+        # Input is already a list of SMILES strings
+        smiles_list = smiles_input[:n]
+    else:
+        raise ValueError("Invalid input. Please provide a file path (str) or a list of SMILES strings.")
+
     results = [compute_quantum_properties(smiles) for smiles in tqdm(smiles_list)]
+
+    # Save results to a CSV
     df_results = pd.DataFrame(results)
     df_results.to_csv(output_csv, index=False)
     print(f"Results saved to {output_csv}")
-
-
-# input_file = "dft_results.xlsx"
-# process_and_save(input_file, n=12)

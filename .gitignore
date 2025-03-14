@@ -1,7 +1,9 @@
 # Folders #
 ###########
 .idea*
-data*
+data/gdb*
+data/feature*
+data/qm9.csv
 *.pyc
 *.dat
 *.clean

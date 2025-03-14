@@ -1,114 +1,148 @@
 import numpy as np
-import pandas as pd
-from sklearn.model_selection import LeaveOneOut, GridSearchCV
+from joblib import dump, load
+
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression, Ridge, Lasso
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, ConstantKernel
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error
 
 import featurization as ft
+import modeling as ml
 
+def smiles_combos():
+    # SMILES data
+    smiles_known = ft.read_smiles("data/dft_results.xlsx", n=12, stripNa=False)
+    smiles_known.remove("[O-][Si](=O)[O-].[Na+].[Na+]")  # psi4 has issues calculating QM properties for this molecule
+    functional_head = ["C(=O)[O-]", "S(=O)(=O)[O-]", "C(=O)NO", "C(=O)O", "OP(=O)(O)O", "C(=O)[O-]", "C(=O)NO",
+                       "C(=O)O", "C(=O)[O-]", "S(=O)(=O)[O-]", "N"]
 
-def evaluate_models(X, y):
-    """Evaluates different regression models using LOOCV with hyperparameter tuning."""
+    # Generate a variety of different reagent molecules with the same tail but different functional group heads
+    functional_groups = ["O", "N", "[O-]", "[N-]", "CO", "C[O-]", "C=N", "CN", "C=[N-]", "C[N-]", "C=CO", "C=C[O-]",
+                         "C(=O)O", "C(=O)[O-]", "C=NO", "C(=O)N", "C=NN", "C=N[O-]", "C(=O)[N-]", "C=N[N-]",
+                         "C(=O)NO", "C(=O)N[O-]", "OP(=O)(O)O", "OP(=O)(O)[O-]"]
+    ft.generate_smiles_combinations(smiles_known, functional_head, functional_groups,
+                                    output_csv="data/functional_group_combos.csv")
+
+def bob_feature_models():
+    # SMILES data
+    smiles_known = ft.read_smiles("data/dft_results.xlsx", n=12, stripNa=True)
+    adsorption_energies = np.array([-298.9083581, -189.8056076, -63.76156057, -190.1, -109.7202813, -206.6133479,
+                                    -74.99093531, -224.4656009, -332.7598172, -240.7, -289.0706311, -241.9092631])
+
+    smiles_combo = ft.read_smiles("data/functional_group_combos.csv")
+
+    # Generate feature matrices with consistent padding
+    X_known, X_combo = ft.generate_bob_feature_matrix(smiles_known, smiles_combo)
+    ft.export_features(X_known, "data/feature_bob_combo_dft.csv")
+    ft.export_features(X_combo, "data/feature_bob_combo.csv")
+
+    # Load generated feature matrices
+    # X_known = ft.load_features("data/feature_bob_dft.csv")
+    # X_unknown = ft.load_features("data/feature_bob_qm9.csv")
+
+    # Normalize features and select best model
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)  # Normalize features
+    X_scaled = scaler.fit_transform(X_known)
+    best_model, model_results = ml.evaluate_models_with_random_search(X_scaled, adsorption_energies, n_iter=100)
+    dump(best_model, "best_model_bob_combo.joblib")
 
-    models = {
-        "Linear Regression": (LinearRegression(), {}),
-        "Ridge Regression": (Ridge(), {"alpha": [0.01, 0.1, 1, 10, 100]}),
-        "Lasso Regression": (Lasso(), {"alpha": [0.01, 0.1, 1, 10, 100]}),
-        "Gaussian Process": (GaussianProcessRegressor(), {
-            "alpha": [1e-10, 1e-5, 1e-2, 0.1],
-            "kernel": [ConstantKernel(1.0) * RBF(length_scale) for length_scale in [0.1, 1, 10]]
-        }),
-        "Random Forest": (RandomForestRegressor(), {
-            "n_estimators": [10, 50, 100, 200],
-            "max_depth": [None, 5, 10]
-        })
-    }
+    # Load chosen best model
+    # best_model = load("best_model_bob.joblib")
 
-    loo = LeaveOneOut()
-    results = {}
+    # Predict unknown adsorption energies
+    X_combo_scaled = scaler.transform(X_combo)
+    predicted_energies = best_model.predict(X_combo_scaled)
+    best_mol = np.argmin(predicted_energies)
+    print("\nBest molecule ", smiles_combo[best_mol], " with adsorption energy", predicted_energies[best_mol], " kJ/mol")
 
-    for name, (model, param_grid) in models.items():
-        print(f"\nTraining {name}...")
+    # Find molecules with predicted energies better than the best known adsorption energy.
+    best_known = np.min(adsorption_energies)
+    better_indices = np.where(predicted_energies < best_known)[0]
+    if len(better_indices) > 0:
+        print(f"Molecules with predicted energy better than {best_known} kJ/mol: ")
+        for idx in better_indices:
+            print(f"Molecule: {smiles_combo[idx]}, Predicted Energy: {predicted_energies[idx]:.6f} kJ/mol")
+    else:
+        print("No new molecules predicted to be better.")
 
-        if param_grid:
-            grid_search = GridSearchCV(model, param_grid, cv=loo, scoring="neg_mean_absolute_error", n_jobs=-1)
-            grid_search.fit(X_scaled, y)
-            best_model = grid_search.best_estimator_
-            best_score = -grid_search.best_score_
-        else:
-            best_model = model
-            best_score = np.mean([
-                mean_absolute_error([y[i]], best_model.fit(np.delete(X_scaled, i, axis=0), np.delete(y, i, axis=0)).predict([X_scaled[i]]))
-                for i in range(len(y))
-            ])
+    ml.save_predictions(smiles_combo, predicted_energies, "results/bob_combo_predictions.csv")
 
-        results[name] = {"model": best_model, "MAE": best_score}
-        print(f"Best MAE: {best_score:.4f}")
+def bob_head_feature_models():
+    # SMILES data
+    smiles_known = ft.read_smiles("data/dft_results.xlsx", n=12, stripNa=True)
+    functional_head = ["C(=O)[O-]", "S(=O)(=O)[O-]", "C(=O)NO", "C(=O)O", "OP(=O)(O)O", "C(=O)[O-]", "C(=O)NO",
+                       "C(=O)O", "C(=O)[O-]", "[O-][Si](=O)[O-]", "S(=O)(=O)[O-]", "N"]
+    adsorption_energies = np.array([-298.9083581, -189.8056076, -63.76156057, -190.1, -109.7202813, -206.6133479,
+                                    -74.99093531, -224.4656009, -332.7598172, -240.7, -289.0706311, -241.9092631])
 
-    # Print full model performance table
-    print("\nModel Performance:")
-    print("-" * 30)
-    for name, result in results.items():
-        print(f"{name:22} | MAE = {result['MAE']:.4f}")
-    print("-" * 30)
+    smiles_unknown = ft.read_smiles("data/qm9.csv", n=1000)  # To predict
+    # smiles_unknown = ["CCCC(=O)[O-]", "CCCS(=O)(=O)[O-]", "CCCC(=O)NO", "CCCCOP(=O)(O)O"]
 
-    # Select best model
-    best_model_name = min(results, key=lambda x: results[x]["MAE"])
-    best_model = results[best_model_name]["model"]
-    print(f"\n🏆 Best Model: {best_model_name} with MAE = {results[best_model_name]['MAE']:.4f}")
+    # Generate feature matrices with consistent padding
+    X_known, X_unknown = ft.generate_bob_feature_matrix(smiles_known, smiles_unknown, functional_head)
+    ft.export_features(X_known, "data/feature_bob_head_dft.csv")
+    ft.export_features(X_unknown, "data/feature_bob_head_qm9.csv")
 
-    return best_model, scaler, results
+    # Load generated feature matrices
+    # X_known = ft.load_features("data/feature_bob_dft.csv")
+    # X_unknown = ft.load_features("data/feature_bob_qm9.csv")
 
+    # Normalize features and select best model
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_known)
+    best_model, model_results = ml.evaluate_models_with_random_search(X_scaled, adsorption_energies, n_iter=100)
+    dump(best_model, "best_model_bob_head.joblib")
 
-def save_predictions(smiles_list, predictions, output_path):
-    df_out = pd.DataFrame({"SMILES": smiles_list, "Predicted Adsorption Energy": predictions})
-    df_out.to_csv(output_path, index=False)
-    print(f"\nPredictions saved to {output_path}")
+    # Load chosen best model
+    # best_model = load("best_model_bob.joblib")
 
+    # Predict unknown adsorption energies
+    X_unknown_scaled = scaler.transform(X_unknown)
+    predicted_energies = best_model.predict(X_unknown_scaled)
+    best_mol = np.argmin(predicted_energies)
+    print("\nBest molecule ", smiles_unknown[best_mol], " with adsorption energy", predicted_energies[best_mol], " kJ/mol")
 
-# Example usage with a water molecule
-# mole = Chem.MolFromSmiles("O")  # Water molecule (H2O)
-# bob = bag_of_bonds(mole)
-# print("Bag of Bonds:", bob)
+    # Find molecules with predicted energies better than the best known adsorption energy.
+    best_known = np.min(adsorption_energies)
+    better_indices = np.where(predicted_energies < best_known)[0]
+    if len(better_indices) > 0:
+        print(f"Molecules with predicted energy better than {best_known} kJ/mol: ")
+        for idx in better_indices:
+            print(f"Molecule: {smiles_unknown[idx]}, Predicted Energy: {predicted_energies[idx]:.6f} kJ/mol")
+    else:
+        print("No new molecules predicted to be better.")
 
-# SMILES data
-smiles_known = ["CCCCCCCC/C=C\\CCCCCCCC(=O)[O-]",
-                "C1=CC=C2C(=C1)C(=O)C3=CC(=C(C(=C3C2=O)O)O)S(=O)(=O)[O-]",
-                "C1=CC=C(C=C1)C(=O)NO",
-                "C(C(=O)O)C(CC(=O)O)(C(=O)O)O",
-                "CCCCCCCCCCCCOP(=O)(O)O",
-                "CCCCCCCCCCCC(=O)N(C)CC(=O)[O-]",
-                "CCCCCCCC(=O)NO",
-                "CCCCCC[C@H](C/C=C\\CCCCCCCC(=O)O)O",
-                "CNCC(=O)[O-]",
-                "[O-][Si](=O)[O-]",
-                "C(C(C(=O)O)S(=O)(=O)[O-])C(=O)O",
-                "CCCCCCCCCCCCN"]  # Known adsorption energies
-functional_head = ["C(=O)[O-]", "S(=O)(=O)[O-]", "C(=O)NO", "C(=O)O", "OP(=O)(O)O", "C(=O)[O-]", "C(=O)NO", "C(=O)O", "C(=O)[O-]",
-                   "[O-][Si](=O)[O-]", "S(=O)(=O)[O-]", "N"]
-smiles_unknown = ft.read_smiles("qm9.csv", n=10)  # To predict
-# smiles_unknown = ["CCCC(=O)[O-]", "CCCS(=O)(=O)[O-]", "CCCC(=O)NO", "CCCCOP(=O)(O)O"]
+    ml.save_predictions(smiles_unknown, predicted_energies, "results/bob_head_predictions.csv")
 
-# Example adsorption energies (replace with real data)
-adsorption_energies = np.array([-298.9083581, -189.8056076, -63.76156057, -190.1, -109.7202813, -206.6133479,
-                                -74.99093531, -224.4656009, -332.7598172, -240.7, -289.0706311, -241.9092631])
+def qm_feature_models():
+    # SMILES data
+    smiles_known = ft.read_smiles("data/dft_results.xlsx", n=12, stripNa=False)
+    smiles_known.remove("[O-][Si](=O)[O-].[Na+].[Na+]") # psi4 has issues calculating QM properties for this molecule
+    functional_head = ["C(=O)[O-]", "S(=O)(=O)[O-]", "C(=O)NO", "C(=O)O", "OP(=O)(O)O", "C(=O)[O-]", "C(=O)NO",
+                       "C(=O)O", "C(=O)[O-]", "S(=O)(=O)[O-]", "N"]
+    adsorption_energies = np.array([-298.9083581, -189.8056076, -63.76156057, -190.1, -109.7202813, -206.6133479,
+                                    -74.99093531, -224.4656009, -332.7598172, -289.0706311, -241.9092631])
 
-# Generate feature matrices with consistent padding
-X_known, X_unknown = ft.generate_bob_feature_matrix(smiles_known, smiles_unknown)
+    # To predict
+    smiles_combos = ft.read_smiles("data/functional_group_combos.csv")
+    smiles_unknown = ft.read_smiles("data/qm9.csv", n=1000)
 
-# # Select best model and scaler
-# best_model, scaler, model_results = evaluate_models(X_known, adsorption_energies)
-#
-# # Predict unknown adsorption energies
-# X_unknown_scaled = scaler.transform(X_unknown)
-# predicted_energies = best_model.predict(X_unknown_scaled)
-# best_mol = np.argmin(predicted_energies)
-# print("\nBest molecule ", smiles_unknown[best_mol], " with adsorption energy", predicted_energies[best_mol], " kJ/mol")
-#
-# save_predictions(smiles_unknown, predicted_energies, "results/predictions.csv")
+    # Generate QM properties for all molecules (using same software for consistency)
+    # ft.qm_properties(smiles_known, output_csv="data/qm_properties_known.csv")
+    # ft.qm_properties(smiles_combos, output_csv="data/qm_properties_combos.csv")
+    # ft.qm_properties(smiles_unknown, output_csv="data/qm_properties_qm9.csv")
+
+    # Load generated feature matrices
+    X_known = ft.load_features("data/qm_properties_known.csv", header=0, index_col=0)
+    # X_combos = ft.load_features("data/qm_properties_combos.csv", header=0, index_col=0)
+    # X_unknown = ft.load_features("data/qm_properties_qm9.csv", header=0, index_col=0)
+
+    # Normalize features and select best model
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_known)
+    best_model, model_results = ml.evaluate_models_with_random_search(X_scaled, adsorption_energies, n_iter=100)
+    dump(best_model, "best_model_qm.joblib")
+
+if __name__ == "__main__":
+    smiles_combos()
+
+    # qm_feature_models()
+
+    bob_feature_models()

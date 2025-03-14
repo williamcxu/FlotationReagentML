@@ -1,0 +1,33 @@
+Model Performance Summary:
+--------------------------------------------------
+Model                  | MAE      | R²      
+--------------------------------------------------
+Linear Regression      | 77.2357 | -0.4666
+	N/A
+Ridge Regression       | 71.6104 | 0.8732
+	{'alpha': np.float64(85.98737339212276)}
+Lasso Regression       | 72.3256 | 0.0000
+	{'alpha': np.float64(56.69849511478853)}
+ElasticNet             | 72.3305 | 0.0000
+	{'alpha': np.float64(70.45683638454501), 'l1_ratio': np.float64(0.7751328233611146)}
+SVR                    | 66.7432 | 0.0503
+	{'C': np.float64(1.5833718339012062), 'epsilon': np.float64(0.05666566321361543), 'kernel': 'poly'}
+Gaussian Process       | 196.3609 | 0.9996
+	{'alpha': np.float64(0.07427695424061662), 'kernel': 1**2 * RBF(length_scale=8.62)}
+Random Forest          | 63.1490 | 0.8054
+	{'max_depth': 19, 'min_samples_split': 5, 'n_estimators': 61}
+Gradient Boosting      | 64.3256 | 0.4595
+	{'learning_rate': np.float64(0.003013864904679803), 'max_depth': 4, 'n_estimators': 102}
+Decision Tree          | 76.0776 | 0.9910
+	{'max_depth': 16, 'min_samples_split': 3}
+KNN Regressor          | 72.3256 | -0.0049
+	{'n_neighbors': 11, 'weights': 'uniform'}
+MLP Regressor          | 73.3984 | 0.9830
+	{'alpha': np.float64(0.0005975027999960298), 'hidden_layer_sizes': (94, 48), 'learning_rate': 'adaptive'}
+--------------------------------------------------
+
+🏆 Best Model: Random Forest with MAE = 63.1490
+Best Hyperparameters: {'max_depth': 19, 'min_samples_split': 5, 'n_estimators': 61}
+
+Best molecule  CNCC(=O)O.[Na+]  with adsorption energy -263.95055188944633  kJ/mol
+No new molecules predicted to be better.
