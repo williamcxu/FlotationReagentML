@@ -8,6 +8,6 @@ main.py contains the setup to perform featurization, preprocess the data, evalua
 
 Packages (beyond standard Python packages) needed for this code:
 - psi4 for quantum chemical computations
-- sciki-learn for machine learning
+- scikit-learn for machine learning
 - rdkit for molecular representations
 - tqdm for the nice progress bar
